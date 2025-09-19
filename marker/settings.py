@@ -25,6 +25,13 @@ class Settings(BaseSettings):
     # LLM
     GOOGLE_API_KEY: Optional[str] = ""
 
+    # AWS Bedrock
+    AWS_REGION: Optional[str] = "us-east-1"
+    AWS_ACCESS_KEY_ID: Optional[str] = ""
+    AWS_SECRET_ACCESS_KEY: Optional[str] = ""
+    AWS_SESSION_TOKEN: Optional[str] = ""
+    BEDROCK_MODEL_ID: Optional[str] = "anthropic.claude-3-5-sonnet-20241022-v2:0"
+
     # General models
     TORCH_DEVICE: Optional[str] = (
         None  # Note: MPS device does not work for text detection, and will default to CPU
