@@ -34,8 +34,8 @@ sys.path.append(project_root)
 
 try:
     # Import Marker et ses modules
-    from marker.converters import PdfConverter
-    from marker.models import load_all_models
+    from marker.converters.pdf import PdfConverter
+    from marker.models import create_model_dict
     from marker.settings import settings
     from marker.logger import configure_logging
     from marker.schema.document import Document
@@ -43,6 +43,14 @@ try:
 except ImportError as e:
     print(f"⚠️ Marker non disponible: {e}")
     MARKER_AVAILABLE = False
+
+    # Classe Document de secours si Marker n'est pas disponible
+    class Document:
+        """Classe Document de substitution quand Marker n'est pas disponible"""
+        def __init__(self):
+            self.pages = []
+            self.metadata = {}
+            self.text = ""
 
 # Import du module de configuration LLM
 from llm_config import LLMConfig
@@ -123,7 +131,7 @@ class PDFAnalyzer:
             try:
                 if self.debug:
                     configure_logging()
-                self.models = load_all_models()
+                self.models = create_model_dict()
                 print("✅ Modèles Marker chargés")
             except Exception as e:
                 print(f"❌ Erreur lors du chargement des modèles: {e}")
@@ -144,10 +152,19 @@ class PDFAnalyzer:
         if not pdf_path.exists():
             raise FileNotFoundError(f"Fichier PDF non trouvé : {pdf_path}")
 
-        # Configuration du dossier de sortie
-        if output_dir is None:
-            output_dir = Path("outputs/analyses")
-        output_dir.mkdir(parents=True, exist_ok=True)
+        # Configuration du dossier de sortie avec structure organisée
+        base_output_dir = Path("/home/roger/RAG/custom_marker/custom_docs/outputs")
+
+        # Créer une structure organisée : outputs/analyses/nom_fichier_YYYYMMDD_HHMMSS/
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        file_stem = pdf_path.stem
+        analysis_dir = base_output_dir / "analyses" / f"{file_stem}_{timestamp}"
+
+        # Créer les sous-dossiers
+        output_dir = analysis_dir
+        (output_dir / "reports").mkdir(parents=True, exist_ok=True)
+        (output_dir / "data").mkdir(parents=True, exist_ok=True)
+        (output_dir / "content").mkdir(parents=True, exist_ok=True)
 
         print(f"\n📄 Analyse approfondie de : {pdf_path.name}")
         print(f"📁 Résultats dans : {output_dir}")
@@ -180,7 +197,7 @@ class PDFAnalyzer:
                 llm_service=config.get("llm_service") if self.use_llm else None
             )
 
-            doc_result = converter(pdf_path)
+            doc_result = converter(str(pdf_path))
 
             # Analyse des résultats
             print("📊 Calcul des statistiques...")
@@ -363,7 +380,7 @@ class PDFAnalyzer:
         }
 
         if hasattr(doc_result, 'pages'):
-            all_text = doc_result.to_markdown()
+            all_text = doc_result.markdown
             analysis["full_text"] = all_text
 
             # Analyse de vocabulaire
@@ -534,28 +551,35 @@ class PDFAnalyzer:
 
         base_name = pdf_path.stem
 
-        # 1. Sauvegarde JSON complète
-        json_file = output_dir / f"{base_name}_complete_analysis.json"
+        # 1. Sauvegarde JSON complète dans data/
+        json_file = output_dir / "data" / f"{base_name}_complete_analysis.json"
         with open(json_file, 'w', encoding='utf-8') as f:
             # Convertir les dataclasses en dict pour la sérialisation
             result_dict = asdict(result)
             json.dump(result_dict, f, indent=2, ensure_ascii=False, default=str)
 
-        # 2. Rapport Markdown détaillé
-        self._generate_markdown_report(result, output_dir / f"{base_name}_detailed_report.md")
+        # 2. Rapport Markdown détaillé dans reports/
+        detailed_report = output_dir / "reports" / f"{base_name}_detailed_report.md"
+        self._generate_markdown_report(result, detailed_report)
 
-        # 3. Rapport HTML interactif
-        self._generate_html_report(result, output_dir / f"{base_name}_interactive_report.html")
+        # 3. Rapport HTML interactif dans reports/
+        html_report = output_dir / "reports" / f"{base_name}_interactive_report.html"
+        self._generate_html_report(result, html_report)
 
-        # 4. Export du markdown extrait
-        markdown_file = output_dir / f"{base_name}_extracted_content.md"
+        # 4. Export du markdown extrait dans content/
+        markdown_file = output_dir / "content" / f"{base_name}_extracted_content.md"
         with open(markdown_file, 'w', encoding='utf-8') as f:
-            f.write(doc_result.to_markdown())
+            f.write(doc_result.markdown)
+
+        # 5. Créer un fichier README pour expliquer la structure
+        readme_file = output_dir / "README.md"
+        self._create_analysis_readme(readme_file, base_name, result)
 
         print(f"📊 Analyse JSON : {json_file}")
-        print(f"📋 Rapport détaillé : {output_dir / f'{base_name}_detailed_report.md'}")
-        print(f"🌐 Rapport HTML : {output_dir / f'{base_name}_interactive_report.html'}")
+        print(f"📋 Rapport détaillé : {detailed_report}")
+        print(f"🌐 Rapport HTML : {html_report}")
         print(f"📝 Contenu Markdown : {markdown_file}")
+        print(f"📖 Guide d'utilisation : {readme_file}")
 
     def _generate_markdown_report(self, result: AnalysisResult, output_file: Path):
         """Génère un rapport Markdown détaillé"""
@@ -683,6 +707,43 @@ class PDFAnalyzer:
 
         with open(output_file, 'w', encoding='utf-8') as f:
             f.write(html_content)
+
+    def _create_analysis_readme(self, readme_file: Path, base_name: str, result: AnalysisResult):
+        """Crée un fichier README expliquant la structure des résultats"""
+        with open(readme_file, 'w', encoding='utf-8') as f:
+            f.write(f"# Analyse PDF - {base_name}\n\n")
+            f.write(f"Analyse générée le : {result.analysis_metadata.get('timestamp', 'N/A')}\n\n")
+
+            f.write("## Structure des dossiers\n\n")
+            f.write("```\n")
+            f.write("├── README.md                    # Ce fichier\n")
+            f.write("├── data/                        # Données d'analyse\n")
+            f.write(f"│   └── {base_name}_complete_analysis.json\n")
+            f.write("├── reports/                     # Rapports d'analyse\n")
+            f.write(f"│   ├── {base_name}_detailed_report.md\n")
+            f.write(f"│   └── {base_name}_interactive_report.html\n")
+            f.write("└── content/                     # Contenu extrait\n")
+            f.write(f"    └── {base_name}_extracted_content.md\n")
+            f.write("```\n\n")
+
+            f.write("## Description des fichiers\n\n")
+            f.write("### 📊 data/\n")
+            f.write("- **complete_analysis.json** : Données complètes d'analyse au format JSON\n\n")
+
+            f.write("### 📋 reports/\n")
+            f.write("- **detailed_report.md** : Rapport détaillé en Markdown\n")
+            f.write("- **interactive_report.html** : Rapport interactif visualisable dans un navigateur\n\n")
+
+            f.write("### 📝 content/\n")
+            f.write("- **extracted_content.md** : Contenu du PDF extrait en Markdown par Marker\n\n")
+
+            f.write("## Statistiques rapides\n\n")
+            stats = result.statistics
+            f.write(f"- **Pages analysées** : {stats.pages_count}\n")
+            f.write(f"- **Mots extraits** : {stats.word_count:,}\n")
+            f.write(f"- **Tableaux détectés** : {stats.tables_count}\n")
+            f.write(f"- **Figures détectées** : {stats.figures_count}\n")
+            f.write(f"- **Temps de lecture estimé** : {stats.reading_time_minutes} minutes\n\n")
 
 def main():
     """Fonction principale"""

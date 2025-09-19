@@ -35,8 +35,8 @@ sys.path.append(project_root)
 
 try:
     # Import Marker et ses modules
-    from marker.converters import PdfConverter
-    from marker.models import load_all_models
+    from marker.converters.pdf import PdfConverter
+    from marker.models import create_model_dict
     from marker.settings import settings
     from marker.logger import configure_logging
     MARKER_AVAILABLE = True
@@ -150,6 +150,57 @@ class MarkdownConverter:
         self.config = config
         print(f"📋 Mode de conversion : {mode} - {self.mode_config['description']}")
 
+    def _create_conversion_readme(self, readme_file: Path, base_name: str, metadata: dict, mode: str):
+        """Crée un fichier README expliquant la structure des résultats de conversion"""
+        with open(readme_file, 'w', encoding='utf-8') as f:
+            f.write(f"# Conversion PDF → Markdown - {base_name}\n\n")
+            f.write(f"Conversion générée le : {metadata.get('timestamp', 'N/A')}\n")
+            f.write(f"Mode de conversion : **{mode}** ({self.CONVERSION_MODES[mode]['description']})\n\n")
+
+            f.write("## Structure des dossiers\n\n")
+            f.write("```\n")
+            f.write("├── README.md                    # Ce fichier\n")
+            f.write("├── markdown/                    # Fichiers Markdown convertis\n")
+            f.write(f"│   └── {base_name}_{mode}.md\n")
+            f.write("├── images/                      # Images extraites du PDF\n")
+            f.write("│   └── [images extraites...]\n")
+            f.write("└── metadata/                    # Métadonnées de conversion\n")
+            f.write(f"    └── {base_name}_metadata.json\n")
+            f.write("```\n\n")
+
+            f.write("## Description des fichiers\n\n")
+            f.write("### 📝 markdown/\n")
+            f.write(f"- **{base_name}_{mode}.md** : Contenu du PDF converti en Markdown avec Marker\n\n")
+
+            f.write("### 🖼️ images/\n")
+            f.write("- Images, graphiques et figures extraits du PDF\n")
+            f.write("- Référencées dans le fichier Markdown\n\n")
+
+            f.write("### 📊 metadata/\n")
+            f.write("- **metadata.json** : Informations détaillées sur la conversion\n\n")
+
+            f.write("## Statistiques de conversion\n\n")
+            f.write(f"- **Pages traitées** : {metadata.get('pages_processed', 0)}\n")
+            f.write(f"- **Images extraites** : {metadata.get('images_extracted', 0)}\n")
+            f.write(f"- **Tableaux détectés** : {metadata.get('tables_found', 0)}\n")
+            f.write(f"- **Équations détectées** : {metadata.get('equations_found', 0)}\n")
+            f.write(f"- **Temps de conversion** : {metadata.get('conversion_time', 0):.2f} secondes\n")
+            f.write(f"- **Mode utilisé** : {mode}\n")
+            if metadata.get('llm_provider'):
+                f.write(f"- **LLM utilisé** : {metadata.get('llm_provider')}\n")
+            f.write("\n")
+
+            if metadata.get('warnings'):
+                f.write("## ⚠️ Avertissements\n\n")
+                for warning in metadata.get('warnings', []):
+                    f.write(f"- {warning}\n")
+                f.write("\n")
+
+            f.write("## Configuration utilisée\n\n")
+            f.write("```json\n")
+            f.write(json.dumps(metadata.get('config_used', {}), indent=2, ensure_ascii=False))
+            f.write("\n```\n")
+
     def _load_models(self):
         """Charge les modèles Marker si nécessaire"""
         if self.models is None:
@@ -160,7 +211,7 @@ class MarkdownConverter:
                     configure_logging()
 
                 # Charger les modèles
-                self.models = load_all_models()
+                self.models = create_model_dict()
                 print("✅ Modèles Marker chargés")
             except Exception as e:
                 print(f"❌ Erreur lors du chargement des modèles: {e}")
@@ -181,16 +232,23 @@ class MarkdownConverter:
         if not pdf_path.exists():
             raise FileNotFoundError(f"Fichier PDF non trouvé : {pdf_path}")
 
-        # Configuration du dossier de sortie
-        if output_dir is None:
-            output_dir = Path("outputs")
-        output_dir.mkdir(parents=True, exist_ok=True)
+        # Configuration du dossier de sortie avec structure organisée
+        base_output_dir = Path("/home/roger/RAG/custom_marker/custom_docs/outputs")
 
-        # Créer des sous-dossiers
+        # Créer une structure organisée : outputs/conversions/nom_fichier_YYYYMMDD_HHMMSS/
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        file_stem = pdf_path.stem
+        conversion_dir = base_output_dir / "conversions" / f"{file_stem}_{timestamp}"
+
+        # Créer les sous-dossiers organisés
+        output_dir = conversion_dir
+        (output_dir / "markdown").mkdir(parents=True, exist_ok=True)
+        (output_dir / "images").mkdir(parents=True, exist_ok=True)
+        (output_dir / "metadata").mkdir(parents=True, exist_ok=True)
+
+        # Ajuster les chemins des sous-dossiers
         images_dir = output_dir / "images"
         metadata_dir = output_dir / "metadata"
-        images_dir.mkdir(exist_ok=True)
-        metadata_dir.mkdir(exist_ok=True)
 
         print(f"\n📄 Conversion de : {pdf_path.name}")
         print(f"📁 Dossier de sortie : {output_dir}")
@@ -218,30 +276,33 @@ class MarkdownConverter:
             print("🔄 Début de la conversion...")
 
             # Conversion avec Marker
-            doc_result = converter(pdf_path)
+            doc_result = converter(str(pdf_path))
 
-            # Extraire les statistiques
-            pages_processed = len(doc_result.pages) if hasattr(doc_result, 'pages') else 0
-            images_extracted = 0
+            # Extraire les statistiques depuis les métadonnées et le contenu
+            pages_processed = len(doc_result.metadata.get('page_stats', [])) if hasattr(doc_result, 'metadata') and doc_result.metadata else 0
+            images_extracted = len(doc_result.images) if hasattr(doc_result, 'images') and doc_result.images else 0
             tables_found = 0
             equations_found = 0
 
-            # Compter les éléments dans les blocs
-            for page in doc_result.pages:
-                for block in page.blocks:
-                    if hasattr(block, 'block_type'):
-                        if 'table' in str(block.block_type).lower():
-                            tables_found += 1
-                        elif 'equation' in str(block.block_type).lower():
-                            equations_found += 1
-                        elif 'figure' in str(block.block_type).lower():
-                            images_extracted += 1
+            # Compter les tables et équations depuis les métadonnées des pages
+            if hasattr(doc_result, 'metadata') and doc_result.metadata:
+                page_stats = doc_result.metadata.get('page_stats', [])
+                for page_stat in page_stats:
+                    block_counts = dict(page_stat.get('block_counts', []))
+                    tables_found += block_counts.get('Table', 0)
+                    # Les équations peuvent être dans différents types de blocs
 
-            # Générer le markdown
-            markdown_content = doc_result.to_markdown()
+            # Générer le markdown et estimer les statistiques
+            markdown_content = doc_result.markdown if hasattr(doc_result, 'markdown') else ""
 
-            # Fichiers de sortie
-            output_file = output_dir / f"{pdf_path.stem}_{self.mode}.md"
+            if markdown_content:
+                # Compter les tables markdown
+                tables_found = markdown_content.count('|') // 3  # Approximation basique
+                # Compter les équations ($ ou $$)
+                equations_found = markdown_content.count('$') // 2
+
+            # Fichiers de sortie organisés
+            output_file = output_dir / "markdown" / f"{pdf_path.stem}_{self.mode}.md"
             metadata_file = metadata_dir / f"{pdf_path.stem}_metadata.json"
 
             # Sauvegarder le markdown
@@ -267,6 +328,10 @@ class MarkdownConverter:
             with open(metadata_file, 'w', encoding='utf-8') as f:
                 json.dump(metadata, f, indent=2, ensure_ascii=False)
 
+            # Créer un README pour expliquer la structure
+            readme_file = output_dir / "README.md"
+            self._create_conversion_readme(readme_file, pdf_path.stem, metadata, self.mode)
+
             print(f"\n✅ Conversion réussie !")
             print(f"📝 Fichier markdown : {output_file}")
             print(f"📊 Pages traitées : {pages_processed}")
@@ -274,6 +339,7 @@ class MarkdownConverter:
             print(f"📋 Tableaux trouvés : {tables_found}")
             print(f"🧮 Équations trouvées : {equations_found}")
             print(f"⏱️  Temps : {elapsed_time:.2f}s")
+            print(f"📖 Guide d'utilisation : {readme_file}")
 
             if warnings:
                 print(f"⚠️ Avertissements : {len(warnings)}")
