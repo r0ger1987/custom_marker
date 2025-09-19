@@ -1,0 +1,41 @@
+# Environment variables - IMPORTANT: Ne jamais commiter les vraies clés API
+.env.local
+.env.production
+.env.backup
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+venv/
+marker_env/
+
+# Output files
+outputs/
+*.pdf
+*.md
+*.json
+*.html
+*.png
+*.jpg
+*.jpeg
+
+# Logs
+*.log
+debug_data/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Test files
+inputs/
+temp/
+tmp/
+
+# Cache
+.cache/
